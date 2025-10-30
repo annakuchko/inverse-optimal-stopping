@@ -175,7 +175,7 @@ def run_param_sweep(
     mtte = np.zeros((S, V), dtype=np.float32)
     memr = np.zeros((S, V), dtype=np.float32)
 
-    sweep_keys = {'eps', 'cs', 'cs_decay', 'eps_decay_rate', 'gamma', 'n_paths', 'out_thresh'}
+    sweep_keys = {'eps', 'cs', 'cs_decay', 'eps_decay_rate', 'gamma', 'n_paths', 'out_thresh', 'q_lr', 'env_lr', 'g_lr'}
     if param not in sweep_keys:
         raise ValueError(f"Unsupported sweep param: {param}. Choose from {sorted(sweep_keys)}")
 
@@ -189,7 +189,7 @@ def run_param_sweep(
             elif param == 'n_paths' and use_synthetic:
                 train_mem = make_synthetic_memory(int(val), synthetic_steps, obs_dim, seed=seed)
                 test_mem = make_synthetic_memory(max(1, int(val) // 2), synthetic_steps, obs_dim, seed=seed + 1)
-            elif param in {'eps', 'cs', 'cs_decay', 'eps_decay_rate', 'gamma', 'out_thresh'}:
+            elif param in {'eps', 'cs', 'cs_decay', 'eps_decay_rate', 'gamma', 'out_thresh', 'q_lr', 'env_lr', 'g_lr'}:
                 kwargs[param] = float(val)
 
             agent = _build_agent(use_superset, conservative, obs_dim, action_dim,
@@ -219,7 +219,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument('--example', default='star',
                    choices=['radial','star','CP1','CP2','CP3','CP1M','CP2M','CP3M','bmG','bmgG','car','azure','nasa_turbofan'])
     p.add_argument('--param', required=True,
-                   choices=['eps','cs','cs_decay','eps_decay_rate','gamma','n_paths','out_thresh'])
+                   choices=['eps','cs','cs_decay','eps_decay_rate','gamma','n_paths','out_thresh','q_lr','env_lr','g_lr'])
     p.add_argument('--values', nargs='+', type=float, required=True,
                    help='List of values for the sweep (space-separated).')
     p.add_argument('--seeds', type=int, default=1)
@@ -259,15 +259,19 @@ def parse_args() -> argparse.Namespace:
     # Output controls
     p.add_argument('--save', action='store_true', help='Save BA/MTTE/MEMR to outputs/sweeps')
     p.add_argument('--print', dest='do_print', action='store_true', help='Print mean +/- std summary table')
+    p.add_argument('--plot', action='store_true', help='Save simple BA/MTTE/MEMR vs param plots')
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     seeds = list(range(args.seeds))
+    cv_splits = 1 if args.conservative else 2
+    if args.synthetic:
+        cv_splits = 1
     base_kwargs: Dict[str, Any] = dict(
         divergence='hellinger',
-        cross_val_splits=(1 if args.conservative else 2),
+        cross_val_splits=cv_splits,
         q_lr=args.q_lr, env_lr=args.env_lr, g_lr=args.g_lr,
         epsilon=args.eps, cs=args.cs, cs_decay=args.cs_decay, eps_decay_rate=args.eps_decay_rate,
         SMOTE_K=args.smote_k, is_cs=args.is_cs, out_thresh=args.out_thresh,
@@ -312,6 +316,29 @@ def main() -> None:
         np.save(f"outputs/sweeps/{stem}_ba.npy", res.ba)
         np.save(f"outputs/sweeps/{stem}_mtte.npy", res.mtte)
         np.save(f"outputs/sweeps/{stem}_memr.npy", res.memr)
+
+    if args.plot:
+        try:
+            import matplotlib.pyplot as plt
+            os.makedirs('outputs/sweeps', exist_ok=True)
+            suf = ("_fix_conserv" if args.conservative else "")
+            stem = f"{args.example}{suf}_{args.param}"
+            x = np.asarray(res.values, dtype=float)
+            for name, arr in [('ba', res.ba), ('mtte', res.mtte), ('memr', res.memr)]:
+                m, s = np.nanmean(arr, axis=0), np.nanstd(arr, axis=0)
+                plt.figure(figsize=(6,4))
+                plt.plot(x, m, marker='o')
+                plt.fill_between(x, m - s, m + s, alpha=0.2)
+                plt.xlabel(args.param)
+                plt.ylabel(name.upper())
+                plt.title(f"{args.example} {name.upper()} vs {args.param}")
+                plt.grid(True, alpha=0.3)
+                outp = f"outputs/sweeps/{stem}_{name}.png"
+                plt.tight_layout()
+                plt.savefig(outp, dpi=150)
+                plt.close()
+        except Exception as e:
+            print(f"Plotting failed: {e}")
 
 
 if __name__ == '__main__':
