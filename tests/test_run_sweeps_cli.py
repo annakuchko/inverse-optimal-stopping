@@ -45,3 +45,26 @@ def test_param_sweep_invalid_param_raises():
     else:
         assert False, 'Expected ValueError for unsupported param'
 
+
+def test_param_sweep_q_lr_smoke():
+    # Sweep over q_lr to ensure learning-rate params are accepted
+    res = sweeps.run_param_sweep(
+        example='star',
+        param='q_lr',
+        values=[0.001, 0.01],
+        seeds=[0],
+        n_epochs=1,
+        batch_size=16,
+        conservative=False,
+        approx_dynamics=False,
+        approx_g=False,
+        device='cpu',
+        use_superset=True,
+        use_synthetic=True,
+        synthetic_paths=4,
+        synthetic_steps=5,
+        obs_dim=2,
+        action_dim=2,
+        base_kwargs={'oversampling': None, 'classify': False},
+    )
+    assert res.ba.shape == (1, 2)
