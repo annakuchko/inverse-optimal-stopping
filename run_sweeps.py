@@ -251,6 +251,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument('--eps-decay-rate', type=float, default=1.0)
     p.add_argument('--smote-k', type=int, default=12)
     p.add_argument('--is-cs', action='store_true')
+    p.add_argument('--oversampling', default='SMOTE', choices=['none','SMOTE','CS-SMOTE','LSMOTE','CS-LSMOTE'],
+                   help='Oversampling strategy (default SMOTE). Use "none" to disable.')
+    p.add_argument('--classify', action='store_true', help='Train classifier instead of full IQS loss')
     p.add_argument('--out-thresh', type=float, default=0.0)
 
     # Output controls
@@ -268,8 +271,8 @@ def main() -> None:
         q_lr=args.q_lr, env_lr=args.env_lr, g_lr=args.g_lr,
         epsilon=args.eps, cs=args.cs, cs_decay=args.cs_decay, eps_decay_rate=args.eps_decay_rate,
         SMOTE_K=args.smote_k, is_cs=args.is_cs, out_thresh=args.out_thresh,
-        oversampling='SMOTE',  # mirrors prior scripts defaults
-        classify=False,
+        oversampling=(None if args.oversampling.lower() == 'none' else args.oversampling),
+        classify=bool(args.classify),
     )
 
     res = run_param_sweep(
@@ -313,4 +316,3 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
-
