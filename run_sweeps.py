@@ -260,6 +260,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument('--save', action='store_true', help='Save BA/MTTE/MEMR to outputs/sweeps')
     p.add_argument('--print', dest='do_print', action='store_true', help='Print mean +/- std summary table')
     p.add_argument('--plot', action='store_true', help='Save simple BA/MTTE/MEMR vs param plots')
+    # Multi-model overlays
+    p.add_argument('--models', nargs='+', default=None,
+                   choices=['classifier','iqs','iqs-smote','model-based','model-based-smote','do-iqs','do-iqs-lb'],
+                   help='Run multiple model presets and overlay results with legend')
     return p.parse_args()
 
 
@@ -278,6 +282,106 @@ def main() -> None:
         oversampling=(None if args.oversampling.lower() == 'none' else args.oversampling),
         classify=bool(args.classify),
     )
+
+    # Multi-model branch: run a sweep per requested model and overlay plots
+    if args.models:
+        results: List[Tuple[str, SweepResult]] = []
+        for model in args.models:
+            overrides: Dict[str, Any] = {}
+            approx_dyn = False
+            approx_g = False
+            if model == 'classifier':
+                overrides.update(oversampling=None, classify=True)
+            elif model == 'iqs':
+                overrides.update(oversampling=None, classify=False)
+            elif model == 'iqs-smote':
+                overrides.update(oversampling='SMOTE', classify=False)
+            elif model == 'model-based':
+                overrides.update(oversampling=None, classify=False)
+                approx_dyn = True
+            elif model == 'model-based-smote':
+                overrides.update(oversampling='SMOTE', classify=False)
+                approx_dyn = True
+            elif model == 'do-iqs':
+                overrides.update(oversampling=None, classify=False)
+                approx_dyn = True
+                approx_g = True
+            elif model == 'do-iqs-lb':
+                overrides.update(oversampling='CS-LSMOTE', classify=False, is_cs=True)
+                approx_dyn = True
+                approx_g = True
+
+            model_kwargs = dict(base_kwargs)
+            # only override keys that exist in base_kwargs
+            for k, v in overrides.items():
+                if k in model_kwargs:
+                    model_kwargs[k] = v
+
+            res = run_param_sweep(
+                example=args.example,
+                param=args.param,
+                values=args.values,
+                seeds=seeds,
+                n_epochs=args.epochs,
+                batch_size=args.batch_size,
+                conservative=args.conservative,
+                approx_dynamics=approx_dyn,
+                approx_g=approx_g,
+                device=args.device,
+                use_superset=not args.legacy,
+                use_synthetic=args.synthetic,
+                synthetic_paths=args.synthetic_paths,
+                synthetic_steps=args.synthetic_steps,
+                obs_dim=args.obs_dim,
+                action_dim=args.action_dim,
+                episodes_train=args.episodes_train,
+                episodes_test=args.episodes_test,
+                max_path_length=args.max_path_length,
+                base_kwargs=model_kwargs,
+            )
+            results.append((model, res))
+
+        suf = ("_fix_conserv" if args.conservative else "")
+        stem = f"{args.example}{suf}_{args.param}"
+        if args.do_print:
+            print(f"Param sweep (multi-model): {args.param} = {results[0][1].values}")
+            for label, r in results:
+                print(f"[{label}] BA   :", _array_to_str(r.ba))
+                print(f"[{label}] MTTE :", _array_to_str(r.mtte))
+                print(f"[{label}] MEMR :", _array_to_str(r.memr))
+
+        if args.save:
+            os.makedirs('outputs/sweeps', exist_ok=True)
+            np.save(f"outputs/sweeps/{stem}_models.npy", np.array([m for m, _ in results], dtype=object))
+            np.save(f"outputs/sweeps/{stem}_values.npy", np.asarray(results[0][1].values, dtype=np.float32))
+            for label, r in results:
+                np.save(f"outputs/sweeps/{stem}_ba_{label}.npy", r.ba)
+                np.save(f"outputs/sweeps/{stem}_mtte_{label}.npy", r.mtte)
+                np.save(f"outputs/sweeps/{stem}_memr_{label}.npy", r.memr)
+
+        if args.plot:
+            try:
+                import matplotlib.pyplot as plt
+                os.makedirs('outputs/sweeps', exist_ok=True)
+                x = np.asarray(results[0][1].values, dtype=float)
+                for metric in ['ba', 'mtte', 'memr']:
+                    plt.figure(figsize=(7,4.5))
+                    for label, r in results:
+                        arr = getattr(r, metric)
+                        m, s = np.nanmean(arr, axis=0), np.nanstd(arr, axis=0)
+                        plt.plot(x, m, marker='o', label=label)
+                        plt.fill_between(x, m - s, m + s, alpha=0.12)
+                    plt.xlabel(args.param)
+                    plt.ylabel(metric.upper())
+                    plt.title(f"{args.example} {metric.upper()} vs {args.param}")
+                    plt.grid(True, alpha=0.3)
+                    plt.legend()
+                    plt.tight_layout()
+                    plt.savefig(f"outputs/sweeps/{stem}_{metric}_multi.png", dpi=150)
+                    plt.close()
+            except Exception as e:
+                print(f"Multi-plotting failed: {e}")
+        return
 
     res = run_param_sweep(
         example=args.example,
