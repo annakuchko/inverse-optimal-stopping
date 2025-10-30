@@ -101,6 +101,27 @@ Useful flags:
 - `--plots-dir` to change plots/tables location
 - `--no-plots`, `--no-tables` to disable saving
 
+## Hyperparameter Sweeps
+
+Consolidated sweeps for parameters previously covered by ad‑hoc `run_*` scripts are available via `run_sweeps.py`.
+
+Examples:
+
+```
+# Sweep epsilon on synthetic data (fast)
+python run_sweeps.py --example star --param eps --values 0.05 0.1 0.2 \
+  --synthetic --epochs 1 --seeds 1 --print
+
+# Sweep number of paths (re-simulate dataset size)
+python run_sweeps.py --example CP1 --param n_paths --values 50 100 250 500 --print
+
+# Conservative family with out-threshold sweep
+python run_sweeps.py --example azure --conservative --param out_thresh --values 0.0 0.005 \
+  --epochs 50 --seeds 3 --save --print
+```
+
+Outputs (when `--save` is set): arrays under `outputs/sweeps/` for the chosen example and parameter.
+
 ## Tests
 
 Run unit tests (uses the local virtual environment if present):
