@@ -1,3 +1,13 @@
+"""
+IQ-Learn base implementation (canonical)
+
+This is the canonical base IQ-Learn implementation. For conservative and car variants, see:
+    - iq_learn_conserv.py
+    - iq_learn_baase_car.py
+
+All other variants are deprecated and raise errors. Use this file as the main reference for IQ-Learn logic.
+"""
+
 from inverse_opt_stopping.q_networks import OfflineQNetwork, OfflineQNetwork_orig, gNetwork, DoubleOfflineQNetwork, Classifier
 import torch
 import torch.nn.functional as F
@@ -9,7 +19,7 @@ from torch.distributions import Categorical
 import pandas as pd
 from matplotlib.colors import LinearSegmentedColormap
        
-from scipy.ndimage.morphology import binary_dilation            
+from scipy.ndimage import binary_dilation            
 import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib as mpl

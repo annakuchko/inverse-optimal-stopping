@@ -1,3 +1,13 @@
+"""
+IQ-Learn conservative implementation (canonical)
+
+This is the canonical conservative IQ-Learn implementation. For base and car variants, see:
+    - iq_learn_base.py
+    - iq_learn_baase_car.py
+
+All other variants are deprecated and raise errors. Use this file as the main reference for conservative IQ-Learn logic.
+"""
+
 from inverse_opt_stopping.q_networks import OfflineQNetwork, OfflineQNetwork_orig, gNetwork, DoubleOfflineQNetwork, Classifier, DegreeNetwork
 import torch
 import torch.nn.functional as F
@@ -8,7 +18,7 @@ from torch.distributions import Categorical
 import pandas as pd
 from matplotlib.colors import LinearSegmentedColormap
        
-from scipy.ndimage.morphology import binary_dilation            
+from scipy.ndimage import binary_dilation            
 import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib as mpl
@@ -36,6 +46,8 @@ warnings.filterwarnings("ignore")
 from sklearn.model_selection import train_test_split
 # train, test = train_test_split(X, test_size=0.25, stratify=X['YOUR_COLUMN_LABEL'])
 from tqdm import tqdm
+# utils
+from inverse_opt_stopping.utils import batch_to_tensors
 # from torch_discounted_cumsum import discounted_cumsum_right
 def truncate(n, decimals=0):
     multiplier=10**decimals
@@ -216,7 +228,7 @@ class IQ_Agent:
             irl_g = irl_q1 - self.q_net.gamma*irl_next_V.cpu() - y_prev
         return irl_G, irl_g
  
-    def getQ(self, obs, evaluate=False,mc_estimate=False):
+    def getQ(self, obs, evaluate=False, mc_estimate=False):
         if evaluate:
             self.q_net.eval()
             with torch.no_grad():
@@ -224,28 +236,37 @@ class IQ_Agent:
                     for m in self.q_net.modules():
                         if m.__class__.__name__.startswith('Dropout'):
                             m.train()
-                q = torch.stack([ self.q_net.get_Q(obs.clone().to(self.device)) for i in range(N_BOOTSTRAP)], dim=-1)
-                q_mean = torch.mean(q, axis=-1).reshape(-1,2)
-                q_std = torch.std(q, axis=-1).reshape(-1,2)
-            return q_mean.reshape(-1,2), q_std.reshape(-1,2)
+                q = torch.stack([self.q_net.get_Q(obs.clone().to(self.device)) for _ in range(N_BOOTSTRAP)], dim=-1)
+                q_mean = torch.mean(q, dim=-1)
+                q_std = torch.std(q, dim=-1)
+                # If classifier head outputs a single logit/prob, expand to two-action vector [1-p, p]
+                if q_mean.dim() == 2 and q_mean.shape[1] == 1:
+                    q0 = 1.0 - q_mean
+                    q1 = q_mean
+                    q_mean = torch.cat([q0, q1], dim=1)
+                    q_std = q_std.repeat(1, 2)
+                return q_mean.reshape(-1, 2), q_std.reshape(-1, 2)
         else:
             self.q_net.train()
-        # with torch.no_grad():
             q = self.q_net.get_Q(obs.clone().to(self.device))
-            # print(f'q.shape: {q.shape}')
-            return q.reshape(-1,2)
+            # Expand single-head classifier output to two-action vector
+            if q.dim() == 2 and q.shape[1] == 1:
+                q = torch.cat([1.0 - q, q], dim=1)
+            return q.reshape(-1, 2)
  
     def getQ_s_a(self, states, actions, evaluate=False, mc_estimate=False, out_degree_weight=None):
         Qs, qs_var = self.getQ(states, evaluate, mc_estimate)
-        if self.conservative:
-            # print(f'type(Qs): {type(Qs)}')
-            # print(f'type( torch.hstack([out_degree_weight, -out_degree_weight])     ): {type( torch.hstack([out_degree_weight, -out_degree_weight])     )}')
+        if self.conservative and out_degree_weight is not None:
+            # Apply conservative gating only if weights are provided; otherwise leave Qs unchanged
             Qs = Qs * torch.hstack([
-                (1+out_degree_weight), 
+                (1+out_degree_weight),
                 (1-out_degree_weight)
-                ])     
-        Q_s_a = torch.gather(Qs.cpu(), dim=-1, index=torch.tensor(actions).to(torch.int64).cpu().reshape(-1, 1))
-        Q_s_a_var = torch.gather(qs_var.cpu(), dim=-1, index=torch.tensor(actions).to(torch.int64).cpu().reshape(-1, 1))
+            ])
+        idx = torch.tensor(actions).to(torch.int64).cpu().reshape(-1, 1)
+        if idx.shape[0] == 1 and Qs.shape[0] > 1:
+            idx = idx.repeat(Qs.shape[0], 1)
+        Q_s_a = torch.gather(Qs.cpu(), dim=-1, index=idx)
+        Q_s_a_var = torch.gather(qs_var.cpu(), dim=-1, index=idx)
        
         return Q_s_a, Q_s_a_var
  
@@ -482,8 +503,8 @@ class IQ_Agent:
                     with torch.no_grad():
                         # irl_q0 = self.q_net(state)
                         # irl_q1 = 1- irl_q0
-                        irl_q0 = self.infer_q(state, 0)
-                        irl_q1 = self.infer_q(state, 1)
+                        irl_q0, _ = self.infer_q(state, 0)
+                        irl_q1, _ = self.infer_q(state, 1)
                         # q1_var = q0_var
                     irl_q0 = irl_q0.cpu()
                     irl_q1 = irl_q1.cpu()
@@ -749,10 +770,10 @@ class IQ_Agent:
             for b_id, ids_batch in enumerate(train_ids):
                 path_ids = np.array([train_batch['path_ids'][i] for i in ids_batch])
                 time_ids = np.array([train_batch['time_ids'][i] for i in ids_batch])
-                cs = torch.from_numpy(np.array([train_batch['confidence_score'][i] for i in ids_batch]))
-                batch = [torch.from_numpy(np.array([train_batch[mem_keys[i]][j] for j in ids_batch])) for i in range(len(mem_keys))]
-                batch[0] = (batch[0]-self.mean)/self.std
-                batch[1] = (batch[1]-self.mean)/self.std
+                path_ids = np.take(train_batch['path_ids'], ids_batch)
+                time_ids = np.take(train_batch['time_ids'], ids_batch)
+                cs = torch.from_numpy(np.take(train_batch['confidence_score'], ids_batch)).float().to(self.device)
+                batch = batch_to_tensors(train_batch, mem_keys, ids_batch, device=self.device, mean=self.mean, std=self.std)
                
                 self.q_net.train()
                 if self.classify:

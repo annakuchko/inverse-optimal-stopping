@@ -1,3 +1,13 @@
+"""
+IQ-Learn car-environment implementation (canonical)
+
+This is the canonical car-environment IQ-Learn implementation. For base and conservative variants, see:
+    - iq_learn_base.py
+    - iq_learn_conserv.py
+
+All other variants are deprecated and raise errors. Use this file as the main reference for car-environment IQ-Learn logic.
+"""
+
 from inverse_opt_stopping.q_networks import OfflineQNetwork, OfflineQNetwork_orig, gNetwork, DoubleOfflineQNetwork, Classifier
 import torch
 import torch.nn.functional as F
@@ -9,7 +19,7 @@ from torch.distributions import Categorical
 import pandas as pd
 from matplotlib.colors import LinearSegmentedColormap
        
-from scipy.ndimage.morphology import binary_dilation            
+from scipy.ndimage import binary_dilation            
 import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib as mpl
