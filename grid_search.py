@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import time
 from forward_algorithms.simulate_expert_data import Simulation
-from inverse_opt_stopping.iq_learn_base import IQ_Agent 
+from inverse_opt_stopping.iq_learn_unified import IQ_Agent 
 import time
 import os 
 import shutil

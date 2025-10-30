@@ -4,6 +4,16 @@ from torch.autograd import Variable, grad
 #  Collection of ANN/RNN for soft Q-function approximation
 
 class SoftQNetwork(nn.Module):
+    """Base class for soft Q-function style networks.
+
+    Parameters
+    - obs_dim: input feature dimension for observations
+    - action_dim: number of actions (size of Q output)
+    - gamma: discount factor carried by networks that predict next state/value
+    - device: torch device string
+
+    Subclasses must implement ``_forward`` and may override helpers.
+    """
     def __init__(self, obs_dim, action_dim, gamma, device='cpu'):
         super(SoftQNetwork, self).__init__()
         self.gamma = gamma
@@ -20,10 +30,11 @@ class SoftQNetwork(nn.Module):
         return out
 
     def jacobian(self, outputs, inputs):
-        """Computes the jacobian of outputs with respect to inputs
-        :param outputs: tensor for the output of some function
-        :param inputs: tensor for the input of some function (probably a vector)
-        :returns: a tensor containing the jacobian of outputs with respect to inputs
+        """Compute Jacobian d(outputs)/d(inputs) for batched inputs.
+
+        Notes: This forms per-output gradients in a loop over ``output_dim``.
+        This is suitable for small output dimensions, which is the case for
+        Q-vectors over few discrete actions.
         """
         batch_size, output_dim = outputs.shape
         jacobian = []
@@ -41,6 +52,12 @@ class SoftQNetwork(nn.Module):
         return jacobian
 
     def grad_pen(self, obs1, action1, obs2, action2, lambda_=1):
+        """Gradient penalty on input sensitivity.
+
+        Computes a penalty proportional to ||∂f/∂x||_2 − 1 on interpolated
+        inputs. Intended as a regularizer; usages in this repo keep batch sizes
+        and output dims small.
+        """
         expert_data = obs1
         policy_data = obs2
         batch_size = expert_data.size()[0]
@@ -69,6 +86,10 @@ class SoftQNetwork(nn.Module):
         return lambda_ * ((gradients_norm - 1) ** 2).mean()
 
 class gNetworkRNN(nn.Module):
+    """Recurrent approximator for g(s) along a sequence.
+
+    Expects input of shape [B, T, obs_dim] and returns per-step g estimates.
+    """
     def __init__(self, obs_dim, action_dim, gamma, device):
         super(gNetworkRNN, self).__init__()
         self.gamma = gamma
@@ -116,6 +137,10 @@ class gNetworkRNN(nn.Module):
                 m.bias.data.fill_(0.001)
 
 class gNetwork(nn.Module):
+    """Feed-forward approximator for g(s).
+
+    Maps observation vectors to a scalar in [0, 1] using a few MLP layers.
+    """
     def __init__(self, obs_dim, action_dim, gamma, device):
         super(gNetwork, self).__init__()
 
@@ -182,6 +207,12 @@ class gNetwork(nn.Module):
                 m.bias.data.fill_(0.001)
 
 class DoubleOfflineQNetwork(SoftQNetwork):
+    """Double Q-network with shared API.
+
+    Forward returns (q1, q2, next_state_1, next_state_2) from two underlying
+    ``OfflineQNetwork`` instances. ``get_Q`` and ``get_next_s`` select a
+    conservative minimum as used by callers in IQ-Learn variants.
+    """
     def __init__(self, obs_dim, action_dim, gamma, device='cpu'):
         super(DoubleOfflineQNetwork, self).__init__(obs_dim, action_dim, gamma, device)
         self.q_net1 = OfflineQNetwork(obs_dim, action_dim, gamma, device)
@@ -197,25 +228,17 @@ class DoubleOfflineQNetwork(SoftQNetwork):
         return q1, q2, st1, st2
 
     def get_Q(self, state):
+        """Return conservative Q = min(Q1, Q2)."""
         Q1, Q2, st1, st2 = self.forward(state)
         # return torch.minimum(torch.stack([Q1,Q2]), 0)
         return torch.minimum(Q1,Q2)
 
     def get_next_s(self, state):
+        """Return next-state prediction corresponding to the min-Q branch."""
         Q1, Q2, st1, st2 = self.forward(state)
-        q = torch.minimum(Q1,Q2)
-        # print(f'q.shape: {q.shape}')
-        st = torch.zeros_like(st1)
-        # print(f'st.shape: {st.shape}')
-        for i, el in enumerate(q):
-            # print(f'el.shape: {el.shape}')
-            # print(f'Q1[i].shape: {Q1[i].shape}')
-            if el[0]==Q1[i][0] and el[1]==Q1[i][1]:
-                st[i] = st1[i]
-            else:
-                st[i] = st2[i]
-                
-        # return torch.mean(torch.stack([st1,st2]),0)
+        # Choose st1 when Q1 <= Q2 element-wise for all actions; otherwise st2.
+        mask = (Q1 <= Q2).all(dim=1)  # [B]
+        st = torch.where(mask[:, None], st1, st2)
         return st
     def weights_init_uniform(self, m):
         classname = m.__class__.__name__
@@ -224,6 +247,10 @@ class DoubleOfflineQNetwork(SoftQNetwork):
             m.bias.data.fill_(0.001)
 
 class OfflineQNetwork(SoftQNetwork):
+    """Q-network with a parallel head for next-state prediction.
+
+    Forward returns (q, next_state). ``get_Q``/``get_next_s`` expose heads.
+    """
     def __init__(self, obs_dim, action_dim, gamma, device='cpu', q_entropy=False):
         super(OfflineQNetwork, self).__init__(obs_dim, action_dim, gamma, device)
         self.obs_dim = obs_dim
@@ -306,10 +333,12 @@ class OfflineQNetwork(SoftQNetwork):
         return q, next_state
 
     def get_Q(self, state):
+        """Return Q-values with shape [B, action_dim]."""
         Q, next_state = self.forward(state)
         return Q
 
     def get_next_s(self, state):
+        """Return next-state prediction with shape [B, obs_dim]."""
         Q, next_state = self.forward(state)
         return next_state
 
@@ -324,6 +353,10 @@ class OfflineQNetwork(SoftQNetwork):
 
 
 class DoubleOfflineQNetwork_orig(SoftQNetwork):
+    """Double Q-network without next-state head.
+
+    Keeps two ``OfflineQNetwork_orig`` instances and returns the minimum Q.
+    """
     def __init__(self, obs_dim, action_dim, gamma, device='cpu'):
         super(DoubleOfflineQNetwork_orig, self).__init__(obs_dim, action_dim, gamma, device)
         self.q_net1 = OfflineQNetwork_orig(obs_dim, action_dim, gamma, device)
@@ -335,6 +368,7 @@ class DoubleOfflineQNetwork_orig(SoftQNetwork):
         return q1,q2
 
     def get_Q(self, state):
+        """Return conservative Q = min(Q1, Q2)."""
         Q1, Q2 = self.forward(state)
         # return torch.minimum(torch.stack([Q1,Q2]),0)
         return torch.minimum(Q1,Q2)
@@ -346,6 +380,7 @@ class DoubleOfflineQNetwork_orig(SoftQNetwork):
             m.bias.data.fill_(0.001)
 
 class OfflineQNetwork_orig(SoftQNetwork):
+    """Simple feed-forward Q-network (no next-state head)."""
     def __init__(self, obs_dim, action_dim, gamma, device='cpu', q_entropy=False):
         super(OfflineQNetwork_orig, self).__init__(obs_dim, action_dim, gamma, device)
         self.gamma = gamma
@@ -401,6 +436,7 @@ class OfflineQNetwork_orig(SoftQNetwork):
         return q
 
     def get_Q(self, state):
+        """Return Q-values with shape [B, action_dim]."""
         Q = self.forward(state)
         return Q
 
@@ -415,6 +451,10 @@ class OfflineQNetwork_orig(SoftQNetwork):
 
 
 class RNN_QNetwork(SoftQNetwork):
+    """Recurrent Q-network over sequences.
+
+    Expects [B, T, obs_dim] and outputs Q-values at the last step [B, A].
+    """
     def __init__(self, obs_dim, action_dim, gamma, device='cpu'):
         super(RNN_QNetwork, self).__init__(obs_dim, action_dim, gamma, device)
         self.gamma = gamma
@@ -454,6 +494,7 @@ class RNN_QNetwork(SoftQNetwork):
         return q
 
     def get_Q(self, state):
+        """Return Q-values with shape [B, action_dim]."""
         Q = self.forward(state)
         return Q
 
@@ -492,6 +533,10 @@ class RNN_QNetwork(SoftQNetwork):
     
 
 class Classifier(SoftQNetwork):
+    """Binary classifier head returning P(action=1 | s) for action_dim==2.
+
+    For action_dim > 2, returns logits/sigmoids for action_dim-1 classes.
+    """
     def __init__(self, obs_dim, action_dim, gamma, device='cpu', q_entropy=False):
         super(Classifier, self).__init__(obs_dim, action_dim, gamma, device)
         self.gamma = gamma
@@ -547,6 +592,7 @@ class Classifier(SoftQNetwork):
         return q
 
     def get_Q(self, state):
+        """Return class probabilities/logits as configured by the head."""
         Q = self.forward(state)
         return Q
 
@@ -610,6 +656,7 @@ class NonPositiveLinear(nn.Module):
         return f'in_features={self.U.shape[1]}, out_features={self.U.shape[0]}, bias={self.bias is not None}'
 
 class DegreeNetwork0(nn.Module):
+    """Legacy degree network (unused). Kept for reference."""
     def __init__(self):
         super(DegreeNetwork, self).__init__()
         
@@ -627,6 +674,10 @@ class DegreeNetwork0(nn.Module):
             # m.weight.data.fill_(-2)
             # m.bias.data.fill_(-10)
 class DegreeNetwork(nn.Module):
+    """Smooth indicator for conservative thresholding.
+
+    Returns sigma((tau - r)/t) with learnable temperature t = softplus(log_t).
+    """
     def __init__(self, tau=0.3, log_t=0.0):  # t = softplus(log_t)
         super().__init__()
         self.tau = nn.Parameter(torch.tensor(float(tau)))

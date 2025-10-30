@@ -545,7 +545,7 @@ if __name__=="__main__":
     import seaborn as sns
     
     from forward_algorithms.simulate_expert_data import Simulation
-    from inverse_opt_stopping.iq_learn_base import IQ_Agent #, plot_st_reg_bm, plot_st_reg_car
+    from inverse_opt_stopping.iq_learn_unified import IQ_Agent #, plot_st_reg_bm, plot_st_reg_car
     import os 
     import shutil
     sns.set_style("whitegrid")
